@@ -5,7 +5,7 @@ A desktop AI assistant built with Tauri, React, and TypeScript that provides Cha
 ## Features
 
 - 🤖 **ChatGPT Integration**: Chat with GPT-4o-mini for text conversations
-- 📷 **Screen Capture**: Capture and analyze screenshots with GPT-4o Vision
+- 📷 **Screen Capture**: Capture and analyze screenshots with GPT-4o-mini Vision
 - 🪟 **Minimized Bar Interface**: Always-on-top minimized bar that expands when needed
 - 🎨 **Modern UI**: Glass morphism design with translucent backgrounds
 - ⚡ **Fast**: Built with Rust backend and React frontend
@@ -57,7 +57,7 @@ A desktop AI assistant built with Tauri, React, and TypeScript that provides Cha
 ### Chat Features
 
 - **Text Chat**: Type messages to chat with GPT-4o-mini
-- **Screen Capture**: Click the 📷 button to capture your screen and analyze it with GPT-4o Vision
+- **Screen Capture**: Click the 📷 button to capture your screen and analyze it with GPT-4o-mini Vision
 - **Auto-Resize**: The window automatically resizes based on content
 
 ### Keyboard Shortcuts
@@ -97,7 +97,7 @@ The Rust backend exposes these Tauri commands:
 
 - `capture_screen()` - Captures the primary display
 - `chat_with_gpt(message)` - Sends text to GPT-4o-mini
-- `chat_with_vision(message, image_data)` - Sends text + image to GPT-4o Vision
+- `chat_with_vision(message, image_data)` - Sends text + image to GPT-4o-mini Vision
 - `test_env()` - Tests environment variable loading (debug)
 
 ## Configuration
