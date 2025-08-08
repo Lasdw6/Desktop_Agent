@@ -1,0 +1,488 @@
+{
+  "total_elements": 16,
+  "browser_windows": [
+    {
+      "name": "Google - Google Chrome - Vividh (Person 1)",
+      "control_type": "PaneControl",
+      "automation_id": "",
+      "class_name": "Chrome_WidgetWin_1",
+      "element_type": "browser_window",
+      "bounding_rect": {
+        "left": -8,
+        "top": -8,
+        "right": 1928,
+        "bottom": 1040,
+        "width": 1936,
+        "height": 1048,
+        "center_x": 960,
+        "center_y": 516
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": false
+    }
+  ],
+  "tabs": [
+    {
+      "name": "Search tabs",
+      "control_type": "MenuItemControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "tab",
+      "bounding_rect": {
+        "left": 6,
+        "top": 0,
+        "right": 34,
+        "bottom": 41,
+        "width": 28,
+        "height": 41,
+        "center_x": 20,
+        "center_y": 20
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": true,
+      "url_related": true
+    },
+    {
+      "name": " unnamed group - \"Directory | Y ... at a Startup\" and 12 other tabs - ",
+      "control_type": "TabControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "tab",
+      "bounding_rect": {
+        "left": 926,
+        "top": 0,
+        "right": 978,
+        "bottom": 41,
+        "width": 52,
+        "height": 41,
+        "center_x": 952,
+        "center_y": 20
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": true
+    },
+    {
+      "name": "New Tab",
+      "control_type": "ButtonControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "tab",
+      "bounding_rect": {
+        "left": 1701,
+        "top": 0,
+        "right": 1729,
+        "bottom": 41,
+        "width": 28,
+        "height": 41,
+        "center_x": 1715,
+        "center_y": 20
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": true
+    },
+    {
+      "name": "Bookmark this tab",
+      "control_type": "ButtonControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "tab",
+      "bounding_rect": {
+        "left": 1746,
+        "top": 51,
+        "right": 1770,
+        "bottom": 75,
+        "width": 24,
+        "height": 24,
+        "center_x": 1758,
+        "center_y": 63
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": true
+    },
+    {
+      "name": "Saved Tab Groups",
+      "control_type": "ToolBarControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "tab",
+      "bounding_rect": {
+        "left": 12,
+        "top": 86,
+        "right": 76,
+        "bottom": 114,
+        "width": 64,
+        "height": 28,
+        "center_x": 44,
+        "center_y": 100
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": true
+    },
+    {
+      "name": "Tab groups",
+      "control_type": "ButtonControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "tab",
+      "bounding_rect": {
+        "left": 40,
+        "top": 86,
+        "right": 68,
+        "bottom": 114,
+        "width": 28,
+        "height": 28,
+        "center_x": 54,
+        "center_y": 100
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": true
+    }
+  ],
+  "address_bars": [
+    {
+      "name": "Address and search bar",
+      "control_type": "EditControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "address_bar",
+      "bounding_rect": {
+        "left": 157,
+        "top": 51,
+        "right": 1674,
+        "bottom": 75,
+        "width": 1517,
+        "height": 24,
+        "center_x": 915,
+        "center_y": 63
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "Search Google or type a URL",
+      "access_key": "Ctrl+L",
+      "clickable": true,
+      "typable": true,
+      "url_related": true
+    },
+    {
+      "name": "This site can access your location.",
+      "control_type": "ButtonControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "address_bar",
+      "bounding_rect": {
+        "left": 1682,
+        "top": 51,
+        "right": 1706,
+        "bottom": 75,
+        "width": 24,
+        "height": 24,
+        "center_x": 1694,
+        "center_y": 63
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": true
+    }
+  ],
+  "navigation_buttons": [
+    {
+      "name": "Back",
+      "control_type": "ButtonControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "navigation",
+      "bounding_rect": {
+        "left": 0,
+        "top": 46,
+        "right": 39,
+        "bottom": 80,
+        "width": 39,
+        "height": 34,
+        "center_x": 19,
+        "center_y": 63
+      },
+      "is_enabled": false,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": true
+    },
+    {
+      "name": "Forward",
+      "control_type": "ButtonControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "navigation",
+      "bounding_rect": {
+        "left": 41,
+        "top": 46,
+        "right": 75,
+        "bottom": 80,
+        "width": 34,
+        "height": 34,
+        "center_x": 58,
+        "center_y": 63
+      },
+      "is_enabled": false,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": true
+    },
+    {
+      "name": "Reload",
+      "control_type": "ButtonControl",
+      "automation_id": "",
+      "class_name": "",
+      "element_type": "navigation",
+      "bounding_rect": {
+        "left": 77,
+        "top": 46,
+        "right": 111,
+        "bottom": 80,
+        "width": 34,
+        "height": 34,
+        "center_x": 94,
+        "center_y": 63
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": true
+    }
+  ],
+  "web_content": [],
+  "clickable_elements": [
+    {
+      "name": "Google - Google Chrome - Vividh (Person 1)",
+      "type": "PaneControl",
+      "element_type": "browser_window",
+      "center": [
+        960,
+        516
+      ],
+      "description": "PaneControl: 'Google - Google Chrome - Vividh (Person 1)' (browser_window)"
+    },
+    {
+      "name": "System",
+      "type": "MenuBarControl",
+      "element_type": "menu",
+      "center": [
+        11,
+        11
+      ],
+      "description": "MenuBarControl: 'System' (menu)"
+    },
+    {
+      "name": "Search tabs",
+      "type": "MenuItemControl",
+      "element_type": "tab",
+      "center": [
+        20,
+        20
+      ],
+      "description": "MenuItemControl: 'Search tabs' (tab)"
+    },
+    {
+      "name": " unnamed group - \"Directory | Y ... at a Startup\" and 12 other tabs - ",
+      "type": "TabControl",
+      "element_type": "tab",
+      "center": [
+        952,
+        20
+      ],
+      "description": "TabControl: ' unnamed group - \"Directory | Y ... at a Startup\" and 12 other tabs - ' (tab)"
+    },
+    {
+      "name": "New Tab",
+      "type": "ButtonControl",
+      "element_type": "tab",
+      "center": [
+        1715,
+        20
+      ],
+      "description": "ButtonControl: 'New Tab' (tab)"
+    },
+    {
+      "name": "Back",
+      "type": "ButtonControl",
+      "element_type": "navigation",
+      "center": [
+        19,
+        63
+      ],
+      "description": "ButtonControl: 'Back' (navigation)"
+    },
+    {
+      "name": "Forward",
+      "type": "ButtonControl",
+      "element_type": "navigation",
+      "center": [
+        58,
+        63
+      ],
+      "description": "ButtonControl: 'Forward' (navigation)"
+    },
+    {
+      "name": "Reload",
+      "type": "ButtonControl",
+      "element_type": "navigation",
+      "center": [
+        94,
+        63
+      ],
+      "description": "ButtonControl: 'Reload' (navigation)"
+    },
+    {
+      "name": "Address and search bar",
+      "type": "EditControl",
+      "element_type": "address_bar",
+      "center": [
+        915,
+        63
+      ],
+      "description": "EditControl: 'Address and search bar' (address_bar)"
+    },
+    {
+      "name": "This site can access your location.",
+      "type": "ButtonControl",
+      "element_type": "address_bar",
+      "center": [
+        1694,
+        63
+      ],
+      "description": "ButtonControl: 'This site can access your location.' (address_bar)"
+    },
+    {
+      "name": "Bookmark this tab",
+      "type": "ButtonControl",
+      "element_type": "tab",
+      "center": [
+        1758,
+        63
+      ],
+      "description": "ButtonControl: 'Bookmark this tab' (tab)"
+    },
+    {
+      "name": "Bookmarks",
+      "type": "ToolBarControl",
+      "element_type": "bookmark",
+      "center": [
+        960,
+        103
+      ],
+      "description": "ToolBarControl: 'Bookmarks' (bookmark)"
+    },
+    {
+      "name": "Saved Tab Groups",
+      "type": "ToolBarControl",
+      "element_type": "tab",
+      "center": [
+        44,
+        100
+      ],
+      "description": "ToolBarControl: 'Saved Tab Groups' (tab)"
+    },
+    {
+      "name": "Tab groups",
+      "type": "ButtonControl",
+      "element_type": "tab",
+      "center": [
+        54,
+        100
+      ],
+      "description": "ButtonControl: 'Tab groups' (tab)"
+    },
+    {
+      "name": "Menu containing hidden bookmarks",
+      "type": "MenuItemControl",
+      "element_type": "menu",
+      "center": [
+        1766,
+        100
+      ],
+      "description": "MenuItemControl: 'Menu containing hidden bookmarks' (menu)"
+    },
+    {
+      "name": "All Bookmarks",
+      "type": "MenuItemControl",
+      "element_type": "bookmark",
+      "center": [
+        1855,
+        100
+      ],
+      "description": "MenuItemControl: 'All Bookmarks' (bookmark)"
+    }
+  ],
+  "typable_elements": [
+    {
+      "name": "Search tabs",
+      "type": "MenuItemControl",
+      "element_type": "tab",
+      "center": [
+        20,
+        20
+      ],
+      "description": "MenuItemControl: 'Search tabs' (tab)"
+    },
+    {
+      "name": "Address and search bar",
+      "type": "EditControl",
+      "element_type": "address_bar",
+      "center": [
+        915,
+        63
+      ],
+      "description": "EditControl: 'Address and search bar' (address_bar)"
+    }
+  ],
+  "clickable_count": 16,
+  "typable_count": 2,
+  "tabs_count": 6,
+  "web_content_count": 0
+}

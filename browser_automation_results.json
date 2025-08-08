@@ -1,0 +1,196 @@
+{
+  "total_elements": 6,
+  "browser_windows": [
+    {
+      "name": "main.py - Desktop_Agent - Cursor",
+      "control_type": "PaneControl",
+      "automation_id": "",
+      "class_name": "Chrome_WidgetWin_1",
+      "element_type": "browser_window",
+      "bounding_rect": {
+        "left": -8,
+        "top": -8,
+        "right": 1928,
+        "bottom": 1040,
+        "width": 1936,
+        "height": 1048,
+        "center_x": 960,
+        "center_y": 516
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": false
+    },
+    {
+      "name": "Calculator",
+      "control_type": "WindowControl",
+      "automation_id": "",
+      "class_name": "ApplicationFrameWindow",
+      "element_type": "browser_window",
+      "bounding_rect": {
+        "left": 1079,
+        "top": 188,
+        "right": 1497,
+        "bottom": 863,
+        "width": 418,
+        "height": 675,
+        "center_x": 1288,
+        "center_y": 525
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": false
+    },
+    {
+      "name": "Chat.tsx - T3 - Cursor",
+      "control_type": "PaneControl",
+      "automation_id": "",
+      "class_name": "Chrome_WidgetWin_1",
+      "element_type": "browser_window",
+      "bounding_rect": {
+        "left": -8,
+        "top": -8,
+        "right": 1928,
+        "bottom": 1040,
+        "width": 1936,
+        "height": 1048,
+        "center_x": 960,
+        "center_y": 516
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": false
+    },
+    {
+      "name": "simple_app.py - Docs Assistant - Cursor",
+      "control_type": "PaneControl",
+      "automation_id": "",
+      "class_name": "Chrome_WidgetWin_1",
+      "element_type": "browser_window",
+      "bounding_rect": {
+        "left": -8,
+        "top": -8,
+        "right": 1928,
+        "bottom": 1040,
+        "width": 1936,
+        "height": 1048,
+        "center_x": 960,
+        "center_y": 516
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": false
+    },
+    {
+      "name": "Spotify Premium",
+      "control_type": "PaneControl",
+      "automation_id": "",
+      "class_name": "Chrome_WidgetWin_1",
+      "element_type": "browser_window",
+      "bounding_rect": {
+        "left": 720,
+        "top": 0,
+        "right": 1536,
+        "bottom": 672,
+        "width": 816,
+        "height": 672,
+        "center_x": 1128,
+        "center_y": 336
+      },
+      "is_enabled": true,
+      "is_visible": true,
+      "help_text": "",
+      "access_key": "",
+      "clickable": true,
+      "typable": false,
+      "url_related": false
+    }
+  ],
+  "tabs": [],
+  "address_bars": [],
+  "navigation_buttons": [],
+  "web_content": [],
+  "clickable_elements": [
+    {
+      "name": "main.py - Desktop_Agent - Cursor",
+      "type": "PaneControl",
+      "element_type": "browser_window",
+      "center": [
+        960,
+        516
+      ],
+      "description": "PaneControl: 'main.py - Desktop_Agent - Cursor' (browser_window)"
+    },
+    {
+      "name": "Calculator",
+      "type": "WindowControl",
+      "element_type": "browser_window",
+      "center": [
+        1288,
+        525
+      ],
+      "description": "WindowControl: 'Calculator' (browser_window)"
+    },
+    {
+      "name": "System",
+      "type": "MenuBarControl",
+      "element_type": "menu",
+      "center": [
+        0,
+        0
+      ],
+      "description": "MenuBarControl: 'System' (menu)"
+    },
+    {
+      "name": "Chat.tsx - T3 - Cursor",
+      "type": "PaneControl",
+      "element_type": "browser_window",
+      "center": [
+        960,
+        516
+      ],
+      "description": "PaneControl: 'Chat.tsx - T3 - Cursor' (browser_window)"
+    },
+    {
+      "name": "simple_app.py - Docs Assistant - Cursor",
+      "type": "PaneControl",
+      "element_type": "browser_window",
+      "center": [
+        960,
+        516
+      ],
+      "description": "PaneControl: 'simple_app.py - Docs Assistant - Cursor' (browser_window)"
+    },
+    {
+      "name": "Spotify Premium",
+      "type": "PaneControl",
+      "element_type": "browser_window",
+      "center": [
+        1128,
+        336
+      ],
+      "description": "PaneControl: 'Spotify Premium' (browser_window)"
+    }
+  ],
+  "typable_elements": [],
+  "clickable_count": 6,
+  "typable_count": 0,
+  "tabs_count": 0,
+  "web_content_count": 0
+}

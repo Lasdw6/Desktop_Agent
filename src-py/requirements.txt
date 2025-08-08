@@ -1,0 +1,15 @@
+Flask
+Flask-Cors
+python-dotenv
+openai
+mss
+Pillow
+pyautogui
+regex
+screenenv
+psutil
+docker
+smolagents
+opencv-python
+numpy
+pytesseract 

@@ -22,7 +22,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12.20", features = ["json"] }
+reqwest = { version = "0.12.20", features = ["json", "blocking"] }
 tokio = { version = "1.45.1", features = ["full"] }
 dotenvy = "0.15.7"
 scrap = "0.5.0"
@@ -33,4 +33,8 @@ base64 = "0.22.1"
 chrono = { version = "0.4", features = ["serde"] }
 enigo = "0.2.0"
 regex = "1.0"
+once_cell = "1.19.0"
+
+[target.'cfg(windows)'.dependencies]
+uiautomation = { version = "0.21.3", default-features = true }
 

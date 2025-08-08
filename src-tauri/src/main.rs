@@ -6,14 +6,17 @@ use chrono::{DateTime, Utc};
 use dotenvy::dotenv;
 use enigo::{Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use image::{ImageFormat, Rgba, RgbaImage};
+use regex;
 use reqwest::Client;
 use scrap::{Capturer, Display};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::Cursor;
+use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
+use uiautomation::UIAutomation;
 
 // Load environment variables from .env file
 fn load_env() -> Result<(), String> {
@@ -100,6 +103,7 @@ struct ContentPart {
 #[derive(Serialize, Deserialize, Debug)]
 struct ImageUrl {
     url: String,
+    detail: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -141,6 +145,51 @@ struct AutomationResponse {
     coordinates: Option<(u32, u32)>,
     text_to_type: Option<String>,
     screenshot: Option<String>, // Base64 encoded screenshot
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct UIElement {
+    name: String,
+    control_type: String,
+    automation_id: String,
+    class_name: String,
+    bounding_rect: BoundingRect,
+    is_enabled: bool,
+    is_visible: bool,
+    help_text: String,
+    access_key: String,
+    clickable: bool,
+    typable: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct BoundingRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+    width: i32,
+    height: i32,
+    center_x: i32,
+    center_y: i32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct UIElementSummary {
+    total_elements: usize,
+    clickable_count: usize,
+    typable_count: usize,
+    clickable_elements: Vec<ElementInfo>,
+    typable_elements: Vec<ElementInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ElementInfo {
+    name: String,
+    #[serde(rename = "type")]
+    element_type: String,
+    center: (i32, i32),
+    description: String,
 }
 
 // Action logging system
@@ -208,6 +257,59 @@ fn add_log(
     }
 }
 
+// New function for UI automation
+#[cfg(windows)]
+fn execute_ui_automation(instruction: &str) -> Result<String, String> {
+    let instruction_lower = instruction.to_lowercase();
+
+    // Attempt 1: text wrapped in single quotes
+    let mut element_name: Option<&str> = None;
+    if let Some(start_idx) = instruction.find("'") {
+        if let Some(end_rel) = instruction[start_idx + 1..].find("'") {
+            element_name = Some(&instruction[start_idx + 1..start_idx + 1 + end_rel]);
+        }
+    }
+
+    // Attempt 2: take substring between "click" and " at "
+    if element_name.is_none() {
+        if let Some(click_idx) = instruction_lower.find("click") {
+            let after_click = &instruction[click_idx + 5..]; // skip "click"
+            let after_click_trim = after_click.trim_start();
+            if !after_click_trim.is_empty() {
+                let end_idx = after_click_trim
+                    .to_lowercase()
+                    .find(" at ")
+                    .unwrap_or(after_click_trim.len());
+                let candidate = after_click_trim[..end_idx].trim();
+                if !candidate.is_empty() && !candidate.starts_with("coordinates") {
+                    element_name = Some(candidate);
+                }
+            }
+        }
+    }
+
+    if let Some(name) = element_name {
+        let automation = UIAutomation::new().map_err(|e| e.to_string())?;
+        let root = automation.get_root_element().unwrap();
+        let matcher = automation
+            .create_matcher()
+            .from(root)
+            .timeout(5000)
+            .name(name);
+
+        if let Ok(element) = matcher.find_first() {
+            element.click().unwrap();
+            let message = format!("✓ Clicked the '{}' element", name);
+            add_log("UI_CLICK", &message, None, None, true, None);
+            return Ok(message);
+        } else {
+            // Continue to fallback path by returning Err
+        }
+    }
+
+    Err("UI Automation action not recognized".to_string())
+}
+
 // Parse and execute automation actions
 fn execute_automation_action(instruction: &str) -> Result<String, String> {
     // Initialize enigo for automation
@@ -244,7 +346,10 @@ fn execute_automation_action(instruction: &str) -> Result<String, String> {
                 None,
             );
 
-            return Ok(format!("✓ Clicked at coordinates ({}, {})", x, y));
+            return Ok(format!(
+                "(Coordinate) ✓ Clicked at coordinates ({}, {})",
+                x, y
+            ));
         } else {
             return Err("Could not extract coordinates from click instruction".to_string());
         }
@@ -267,7 +372,7 @@ fn execute_automation_action(instruction: &str) -> Result<String, String> {
                 None,
             );
 
-            return Ok(format!("✓ Typed: {}", text));
+            return Ok(format!("(Coordinate) ✓ Typed: {}", text));
         } else {
             return Err("Could not extract text from type instruction".to_string());
         }
@@ -302,7 +407,7 @@ fn execute_automation_action(instruction: &str) -> Result<String, String> {
                 None,
             );
 
-            return Ok(format!("✓ Pressed {}", key_name));
+            return Ok(format!("(Coordinate) ✓ Pressed {}", key_name));
         } else {
             return Err(
                 "Unsupported key press command. Supported keys: Enter, Tab, Escape, Space"
@@ -332,7 +437,7 @@ fn execute_automation_action(instruction: &str) -> Result<String, String> {
         );
 
         return Ok(format!(
-            "✓ Scrolled {}",
+            "(Coordinate) ✓ Scrolled {}",
             if scroll_amount < 0 { "down" } else { "up" }
         ));
     }
@@ -606,58 +711,977 @@ fn get_simple_font() -> std::collections::HashMap<char, Vec<u8>> {
     font
 }
 
-#[tauri::command]
-async fn capture_screen() -> Result<String, String> {
-    let display =
-        Display::primary().map_err(|e| format!("Failed to get primary display: {}", e))?;
-    let mut capturer =
-        Capturer::new(display).map_err(|e| format!("Failed to create capturer: {}", e))?;
+// Simplify call_python_ui_discovery to only use Python scripts
+fn call_python_ui_discovery(action: &str, args: &[&str]) -> Result<String, String> {
+    // Execute Python script directly
+    let mut cmd = Command::new("python");
+    cmd.arg("../src-py/ui_element_discovery.py").arg(action);
+    for arg in args {
+        cmd.arg(arg);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to execute Python script: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        // Print and log Python UI discovery stderr
+        println!("PY_UI_DISCOVERY_ERROR (action: {}): {}", action, stderr);
+        add_log(
+            "PY_UI_DISCOVERY_ERROR",
+            &format!("Python ui_element_discovery.py {} stderr", action),
+            None,
+            Some(stderr.clone()),
+            false,
+            None,
+        );
+        return Err(format!("Python script failed: {}", stderr));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // Print raw Python UI discovery output to console
+    println!("PY_UI_DISCOVERY (action: {}): {}", action, stdout);
+    // Log the raw Python UI discovery output
+    add_log(
+        "PY_UI_DISCOVERY",
+        &format!("Python ui_element_discovery.py {} output", action),
+        None,
+        Some(stdout.clone()),
+        true,
+        None,
+    );
+    Ok(stdout)
+}
 
-    let (w, h) = (capturer.width(), capturer.height());
+// Simplify call_python_browser_automation to only use Python scripts
+fn call_python_browser_automation(action: &str, args: &[&str]) -> Result<String, String> {
+    // Execute Python script directly
+    let mut cmd = Command::new("python");
+    cmd.arg("../src-py/web_browser_automation.py").arg(action);
+    for arg in args {
+        cmd.arg(arg);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to execute browser automation script: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        // Print and log Python browser automation stderr
+        println!(
+            "PY_BROWSER_AUTOMATION_ERROR (action: {}): {}",
+            action, stderr
+        );
+        add_log(
+            "PY_BROWSER_AUTOMATION_ERROR",
+            &format!("Python web_browser_automation.py {} stderr", action),
+            None,
+            Some(stderr.clone()),
+            false,
+            None,
+        );
+        return Err(format!("Browser automation script failed: {}", stderr));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // Print raw Python browser automation output to console
+    println!("PY_BROWSER_AUTOMATION (action: {}): {}", action, stdout);
+    // Log the raw Python browser automation output
+    add_log(
+        "PY_BROWSER_AUTOMATION",
+        &format!("Python web_browser_automation.py {} output", action),
+        None,
+        Some(stdout.clone()),
+        true,
+        None,
+    );
+    Ok(stdout)
+}
 
-    // Try to capture a frame (may need a few attempts)
-    let mut attempts = 0;
-    let frame = loop {
-        match capturer.frame() {
-            Ok(frame) => break frame,
-            Err(error) => {
-                if attempts > 10 {
-                    return Err(format!(
-                        "Failed to capture screen after 10 attempts: {}",
-                        error
+// Call Python host screen UI detection system
+fn call_python_host_screen_detection(action: &str, args: &[&str]) -> Result<String, String> {
+    // Execute Python script directly
+    let mut cmd = Command::new("python");
+    cmd.arg("../src-py/ui_element_discovery.py").arg(action);
+    for arg in args {
+        cmd.arg(arg);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to execute host screen detection script: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        // Print and log Python host screen detection stderr
+        println!("PY_HOST_SCREEN_ERROR (action: {}): {}", action, stderr);
+        add_log(
+            "PY_HOST_SCREEN_ERROR",
+            &format!("Python ui_element_discovery.py {} stderr", action),
+            None,
+            Some(stderr.clone()),
+            false,
+            None,
+        );
+        return Err(format!("Host screen detection script failed: {}", stderr));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // Print raw Python host screen detection output to console
+    println!("PY_HOST_SCREEN (action: {}): {}", action, stdout);
+    // Log the raw Python host screen detection output
+    add_log(
+        "PY_HOST_SCREEN",
+        &format!("Python ui_element_discovery.py {} output", action),
+        None,
+        Some(stdout.clone()),
+        true,
+        None,
+    );
+    Ok(stdout)
+}
+
+// UI Element Discovery Functions
+fn discover_ui_elements() -> Result<Vec<UIElement>, String> {
+    let output = call_python_ui_discovery("discover", &[])?;
+
+    let elements: Vec<UIElement> =
+        serde_json::from_str(&output).map_err(|e| format!("Failed to parse UI elements: {}", e))?;
+
+    Ok(elements)
+}
+
+// Host Screen UI Element Discovery Functions
+fn discover_host_screen_elements() -> Result<serde_json::Value, String> {
+    let output = call_python_host_screen_detection("discover", &[])?;
+
+    let elements: serde_json::Value = serde_json::from_str(&output)
+        .map_err(|e| format!("Failed to parse host screen elements: {}", e))?;
+
+    Ok(elements)
+}
+
+fn get_host_screen_elements_summary() -> Result<serde_json::Value, String> {
+    let output = call_python_host_screen_detection("test-host-screen", &[])?;
+
+    let summary: serde_json::Value = serde_json::from_str(&output)
+        .map_err(|e| format!("Failed to parse host screen summary: {}", e))?;
+
+    Ok(summary)
+}
+
+// Format host screen UI data for LLM prompts
+fn format_host_screen_summary(host_screen_data: &serde_json::Value) -> Option<String> {
+    if let Some(elements) = host_screen_data.as_array() {
+        if elements.is_empty() {
+            return None;
+        }
+
+        let mut summary = String::from("\n\n🖥️ HOST SCREEN UI ELEMENTS (Computer Vision):\n");
+
+        let clickable_elements: Vec<&serde_json::Value> = elements
+            .iter()
+            .filter(|elem| {
+                elem.get("clickable")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        let typable_elements: Vec<&serde_json::Value> = elements
+            .iter()
+            .filter(|elem| {
+                elem.get("typable")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if !clickable_elements.is_empty() {
+            summary.push_str(&format!(
+                "CLICKABLE ELEMENTS ({} total):\n",
+                clickable_elements.len()
+            ));
+            for (i, elem) in clickable_elements.iter().enumerate().take(10) {
+                let name = elem
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("Unknown");
+                let control_type = elem
+                    .get("control_type")
+                    .and_then(|ct| ct.as_str())
+                    .unwrap_or("Element");
+                let confidence = elem
+                    .get("confidence")
+                    .and_then(|c| c.as_f64())
+                    .unwrap_or(0.0);
+
+                if let Some(bounding_rect) = elem.get("bounding_rect") {
+                    let center_x = bounding_rect
+                        .get("center_x")
+                        .and_then(|x| x.as_i64())
+                        .unwrap_or(0);
+                    let center_y = bounding_rect
+                        .get("center_y")
+                        .and_then(|y| y.as_i64())
+                        .unwrap_or(0);
+
+                    summary.push_str(&format!(
+                        "{}. {}: '{}' at ({}, {}) [confidence: {:.2}]\n",
+                        i + 1,
+                        control_type,
+                        name,
+                        center_x,
+                        center_y,
+                        confidence
                     ));
                 }
-                attempts += 1;
-                thread::sleep(Duration::from_millis(100));
             }
-        };
-    };
+        }
 
-    // Convert BGRA to RGBA
-    let mut rgba_data = Vec::with_capacity(frame.len());
-    for bgra in frame.chunks_exact(4) {
-        rgba_data.push(bgra[2]); // R
-        rgba_data.push(bgra[1]); // G
-        rgba_data.push(bgra[0]); // B
-        rgba_data.push(bgra[3]); // A
+        if !typable_elements.is_empty() {
+            summary.push_str(&format!(
+                "\nTYPABLE ELEMENTS ({} total):\n",
+                typable_elements.len()
+            ));
+            for (i, elem) in typable_elements.iter().enumerate().take(5) {
+                let name = elem
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("Unknown");
+                let control_type = elem
+                    .get("control_type")
+                    .and_then(|ct| ct.as_str())
+                    .unwrap_or("Element");
+                let confidence = elem
+                    .get("confidence")
+                    .and_then(|c| c.as_f64())
+                    .unwrap_or(0.0);
+
+                if let Some(bounding_rect) = elem.get("bounding_rect") {
+                    let center_x = bounding_rect
+                        .get("center_x")
+                        .and_then(|x| x.as_i64())
+                        .unwrap_or(0);
+                    let center_y = bounding_rect
+                        .get("center_y")
+                        .and_then(|y| y.as_i64())
+                        .unwrap_or(0);
+
+                    summary.push_str(&format!(
+                        "{}. {}: '{}' at ({}, {}) [confidence: {:.2}]\n",
+                        i + 1,
+                        control_type,
+                        name,
+                        center_x,
+                        center_y,
+                        confidence
+                    ));
+                }
+            }
+        }
+
+        summary.push_str("\n✨ HOST SCREEN ACTION FORMAT:\n");
+        summary
+            .push_str("• 'Click the \"[ElementName]\" button' (Computer Vision - HIGH ACCURACY)\n");
+        summary.push_str("• 'Type \"text\" in the \"[ElementName]\" field' (For text inputs)\n");
+        summary.push_str("• 'Click coordinates (x, y)' (Fallback when element not found)\n\n");
+
+        return Some(summary);
     }
 
-    // Create image
-    let mut img = RgbaImage::from_raw(w as u32, h as u32, rgba_data)
-        .ok_or("Failed to create image from raw data")?;
+    None
+}
 
-    // Add grid overlay
-    add_grid_overlay(&mut img)?;
+fn get_ui_elements_summary() -> Result<UIElementSummary, String> {
+    let output = call_python_ui_discovery("summary", &[])?;
 
-    // Convert to PNG bytes
-    let mut png_bytes = Vec::new();
-    let mut cursor = Cursor::new(&mut png_bytes);
-    img.write_to(&mut cursor, ImageFormat::Png)
-        .map_err(|e| format!("Failed to encode PNG: {}", e))?;
+    let summary: UIElementSummary =
+        serde_json::from_str(&output).map_err(|e| format!("Failed to parse UI summary: {}", e))?;
 
-    // Encode to base64
-    let base64_image = BASE64.encode(&png_bytes);
-    Ok(base64_image)
+    Ok(summary)
+}
+
+fn find_ui_element_by_description(description: &str) -> Result<Option<UIElement>, String> {
+    let output = call_python_ui_discovery("find", &[description])?;
+
+    // Try to parse as a single element first
+    if let Ok(element) = serde_json::from_str::<UIElement>(&output) {
+        return Ok(Some(element));
+    }
+
+    // If that fails, it might be an error response
+    let error_response: serde_json::Value = serde_json::from_str(&output)
+        .map_err(|e| format!("Failed to parse find response: {}", e))?;
+
+    if error_response.get("error").is_some() {
+        return Ok(None);
+    }
+
+    Err("Unexpected response format".to_string())
+}
+
+// Browser Automation Functions
+fn discover_browser_elements_rust(
+    target_browser: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let args = if let Some(browser) = target_browser {
+        vec![browser]
+    } else {
+        vec![]
+    };
+
+    let output = call_python_browser_automation("discover", &args)?;
+
+    let elements: serde_json::Value = serde_json::from_str(&output)
+        .map_err(|e| format!("Failed to parse browser elements: {}", e))?;
+
+    Ok(elements)
+}
+
+fn get_browser_elements_summary_rust(
+    target_browser: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let args = if let Some(browser) = target_browser {
+        vec![browser]
+    } else {
+        vec![]
+    };
+
+    let output = call_python_browser_automation("summary", &args)?;
+
+    // Try to parse as JSON, but handle text summary as well
+    if let Ok(json_summary) = serde_json::from_str::<serde_json::Value>(&output) {
+        Ok(json_summary)
+    } else {
+        // If it's a text summary, wrap it in JSON
+        Ok(serde_json::json!({"summary": output}))
+    }
+}
+
+fn find_browser_element_by_description_rust(
+    description: &str,
+    target_browser: Option<&str>,
+) -> Result<Option<serde_json::Value>, String> {
+    let mut args = vec![];
+    if let Some(browser) = target_browser {
+        args.push(browser);
+    }
+    args.push(description);
+
+    let output = call_python_browser_automation("find", &args)?;
+
+    // Try to parse as a single element first
+    if let Ok(element) = serde_json::from_str::<serde_json::Value>(&output) {
+        if element.get("error").is_some() {
+            return Ok(None);
+        }
+        return Ok(Some(element));
+    }
+
+    Ok(None)
+}
+
+// Helper function to format browser summary for the prompt
+fn format_browser_summary(browser_info: &serde_json::Value) -> Option<String> {
+    if !browser_info.is_object()
+        || browser_info.get("total_elements").and_then(|v| v.as_i64()) == Some(0)
+    {
+        return None;
+    }
+
+    let mut summary = String::from("\n\n🌐 WEB BROWSER CONTEXT:\n");
+
+    if let Some(windows) = browser_info
+        .get("browser_windows")
+        .and_then(|v| v.as_array())
+    {
+        if !windows.is_empty() {
+            summary.push_str(&format!("Found {} browser window(s):\n", windows.len()));
+            for window in windows.iter().take(2) {
+                // Limit to 2 windows
+                if let Some(name) = window.get("name").and_then(|v| v.as_str()) {
+                    if !name.to_lowercase().contains("cursor") {
+                        summary.push_str(&format!("  - Window: \"{}\"\n", name));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(tabs) = browser_info.get("tabs").and_then(|v| v.as_array()) {
+        if !tabs.is_empty() {
+            summary.push_str(&format!("\nOpen Tabs ({} total):\n", tabs.len()));
+            for tab in tabs.iter().take(5) {
+                // Limit to 5 tabs
+                if let Some(name) = tab.get("name").and_then(|v| v.as_str()) {
+                    if !name.trim().is_empty() {
+                        summary.push_str(&format!("  - Tab: \"{}\"\n", name));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(address_bars) = browser_info.get("address_bars").and_then(|v| v.as_array()) {
+        if !address_bars.is_empty() {
+            summary.push_str("\nAddress Bar(s):\n");
+            for bar in address_bars.iter().take(2) {
+                if let Some(name) = bar.get("name").and_then(|v| v.as_str()) {
+                    let center_x = bar
+                        .get("bounding_rect")
+                        .and_then(|r| r.get("center_x"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let center_y = bar
+                        .get("bounding_rect")
+                        .and_then(|r| r.get("center_y"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    summary.push_str(&format!(
+                        "  - \"{}\" at ({}, {})\n",
+                        name, center_x, center_y
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(nav_buttons) = browser_info
+        .get("navigation_buttons")
+        .and_then(|v| v.as_array())
+    {
+        if !nav_buttons.is_empty() {
+            summary.push_str("\nNavigation Buttons:\n");
+            for button in nav_buttons.iter().take(4) {
+                if let Some(name) = button.get("name").and_then(|v| v.as_str()) {
+                    let center_x = button
+                        .get("bounding_rect")
+                        .and_then(|r| r.get("center_x"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let center_y = button
+                        .get("bounding_rect")
+                        .and_then(|r| r.get("center_y"))
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    summary.push_str(&format!(
+                        "  - \"{}\" button at ({}, {})\n",
+                        name, center_x, center_y
+                    ));
+                }
+            }
+        }
+    }
+
+    summary.push_str("\n✨ BROWSER ACTION FORMAT:\n");
+    summary.push_str("• 'Type \"cats\" in the \"Address and search bar\"'\n");
+    summary.push_str("• 'Click the \"New Tab\" button'\n");
+    summary.push_str("• 'Click the \"Back\" button'\n\n");
+
+    Some(summary)
+}
+
+fn create_enhanced_automation_prompt(
+    goal: &str,
+    previous_instruction: Option<&str>,
+    step_count: Option<u32>,
+    width: u32,
+    height: u32,
+) -> String {
+    // First, try to get browser context using summary (which returns formatted text)
+    let browser_context = match get_browser_elements_summary_rust(None) {
+        Ok(summary_data) => {
+            // Check if it's a text summary wrapped in JSON
+            if let Some(summary_text) = summary_data.get("summary").and_then(|s| s.as_str()) {
+                if !summary_text.trim().is_empty() && summary_text.contains("ADDRESS") {
+                    format!("\n{}\n", summary_text)
+                } else {
+                    String::new()
+                }
+            } else {
+                // Try to format as structured data if it's JSON
+                format_browser_summary(&summary_data).unwrap_or_default()
+            }
+        }
+        Err(_) => String::new(),
+    };
+
+    // Try to get host screen UI elements using computer vision
+    let host_screen_info = match discover_host_screen_elements() {
+        Ok(elements) => format_host_screen_summary(&elements).unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+
+    // Try to get UI elements summary for desktop apps (Windows UI Automation)
+    let ui_info = match get_ui_elements_summary() {
+        Ok(summary) => {
+            let mut ui_text = format!(
+                "\n🎯 DESKTOP APP UI ELEMENTS (Windows UI Automation):\n\nCLICKABLE ELEMENTS ({} total):\n",
+                summary.clickable_count
+            );
+
+            for (i, elem) in summary.clickable_elements.iter().enumerate().take(10) {
+                ui_text.push_str(&format!(
+                    "{}. {} at ({}, {})\n",
+                    i + 1,
+                    elem.description,
+                    elem.center.0,
+                    elem.center.1
+                ));
+            }
+
+            if !summary.typable_elements.is_empty() {
+                ui_text.push_str(&format!(
+                    "\nTYPABLE ELEMENTS ({} total):\n",
+                    summary.typable_count
+                ));
+                for (i, elem) in summary.typable_elements.iter().enumerate().take(5) {
+                    ui_text.push_str(&format!(
+                        "{}. {} at ({}, {})\n",
+                        i + 1,
+                        elem.description,
+                        elem.center.0,
+                        elem.center.1
+                    ));
+                }
+            }
+
+            ui_text.push_str("\n✨ DESKTOP ACTION FORMAT:\n");
+            ui_text.push_str("• 'Click the \"[ElementName]\" button' (UI Automation - BEST)\n");
+            ui_text.push_str("• 'Click coordinates (x, y)' (Fallback when element not found)\n\n");
+
+            ui_text
+        }
+        Err(_) => String::new(),
+    };
+
+    let combined_context = format!("{}{}{}", browser_context, host_screen_info, ui_info);
+
+    // Example sequence for reference (helps model understand the desired format)
+    let example_sequence = r#"EXAMPLE – NAVIGATE TO SATORU GOJO WIKIPEDIA (one action per step):
+1. Click the "Address and search bar"
+2. Type "https://en.wikipedia.org/wiki/Satoru_Gojo"
+3. Press Enter
+4. Wait 3 seconds for the page to load
+5. If not on the Wikipedia page, click the first search result titled "Satoru Gojo – Wikipedia and so on until the page is goal is completed""#;
+
+    let base_prompt = if let Some(prev_instruction) = previous_instruction {
+        format!(
+            r#"AUTOMATION TASK CONTINUATION: {}
+
+Previous step #{}: {}
+
+I've taken the previous action. Here's the current screenshot. The screen resolution is {}x{}.
+{}
+{}
+IMPORTANT – ACTION PREFERENCE (read carefully):
+1️⃣  BROWSER/UI-ELEMENT ACTIONS – STRONGLY PREFERRED
+    • Reference controls by their visible text/role from the context above.
+    • Examples: 
+      'Click the "New Tab" button'
+      'Type "latest news" in the "Address and search bar"'
+      'Click the "Save" button'
+    • These instructions are the most reliable.
+
+2️⃣  COORDINATE ACTIONS – LAST RESORT
+    • Only give grid coordinates when no unique element can be identified.
+    • The agent will prefix results with (Coordinate) when this fallback is used.
+    • Example: 'Click coordinates (700, 300)'
+
+
+GRID SYSTEM:
+- Grid squares are 75x75 pixels each
+- Coordinates are labeled at intersections like (75,75), (150,150), (225,225), etc.
+
+OTHER AVAILABLE ACTIONS:
+- KEYBOARD: 'Press [key name]' (Enter, Tab, Escape, Space)
+- SCROLL: 'Scroll [direction]' (up, down)
+
+RESPONSE RULES:
+1. Give ONE specific action at a time.
+2. For element actions, use exact names from the context.
+3. For coordinate actions, use exact grid coordinates.
+4. If the goal is completed, say 'TASK COMPLETED'.
+
+Analyze the current state and provide the NEXT SINGLE ACTION to continue toward the goal. What should I do next?"#,
+            goal,
+            step_count.unwrap_or(0),
+            prev_instruction,
+            width,
+            height,
+            combined_context,
+            example_sequence
+        )
+    } else {
+        format!(
+            r#"AUTOMATION TASK: {}
+
+You are an automation assistant that controls computer actions.
+I will provide a screenshot with a grid overlay for precise positioning. The screen resolution is {}x{}.
+Use the information from the screenshot and the UI context below to determine the next action.
+{}
+{}
+IMPORTANT – ACTION PREFERENCE (read carefully):
+1️⃣  BROWSER/UI-ELEMENT ACTIONS – STRONGLY PREFERRED
+    • Reference controls by their visible text/role from the context above.
+    • Examples: 
+      'Click the "New Tab" button'
+      'Type "latest news" in the "Address and search bar"'
+      'Click the "Save" button'
+    • These instructions are the most reliable.
+
+2️⃣  COORDINATE ACTIONS – LAST RESORT
+    • Only give grid coordinates when no unique element can be identified.
+    • The agent will prefix results with (Coordinate) when this fallback is used.
+    • Example: 'Click coordinates (700, 300)'
+
+GRID SYSTEM:
+- Grid squares are 75x75 pixels each
+- Coordinates are labeled at intersections like (75,75), (150,150), (225,225), etc.
+
+OTHER AVAILABLE ACTIONS:
+- KEYBOARD: 'Press [key name]' (Enter, Tab, Escape, Space)
+- SCROLL: 'Scroll [direction]' (up, down)
+
+RESPONSE RULES:
+1. Give ONE specific action at a time.
+2. For element actions, use exact names from the context.
+3. For coordinate actions, use exact grid coordinates.
+4. If the goal is completed, say 'TASK COMPLETED'.
+
+What is the first action I should take to accomplish this goal?"#,
+            goal, width, height, combined_context, example_sequence
+        )
+    };
+
+    base_prompt
+}
+
+// Enhanced automation action execution with UI element awareness
+fn extract_multiple_element_names(instruction: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let instruction_lower = instruction.to_lowercase();
+
+    // 1. High-priority: Extract all quoted strings.
+    if let Ok(re) = regex::Regex::new(r#""([^"]+)""#) {
+        for cap in re.captures_iter(&instruction_lower) {
+            let candidate = cap[1].trim().to_string();
+            if !candidate.is_empty() && !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    // 2. Add known, important element names if they appear in the instruction.
+    let known_elements = [
+        "address and search bar",
+        "address bar",
+        "search bar",
+        "new tab",
+        "back",
+        "forward",
+        "reload",
+        "refresh",
+    ];
+    for elem in &known_elements {
+        if instruction_lower.contains(elem) {
+            let candidate = elem.to_string();
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    candidates
+}
+
+fn execute_enhanced_automation_action(instruction: &str) -> Result<String, String> {
+    let potential_targets = extract_multiple_element_names(instruction);
+    let instruction_lower = instruction.to_lowercase();
+
+    // ---------------------------------------------
+    // 1. CLICK handling (element-based preferred)
+    // ---------------------------------------------
+    if instruction_lower.contains("click") {
+        // Try clicking any identified UI / browser element names first.
+        for target_name in &potential_targets {
+            // Try host screen element (computer vision - highest priority)
+            if let Ok(elements) = discover_host_screen_elements() {
+                if let Some(elements_array) = elements.as_array() {
+                    for element in elements_array {
+                        if let Some(element_name) = element.get("name").and_then(|n| n.as_str()) {
+                            if element_name
+                                .to_lowercase()
+                                .contains(&target_name.to_lowercase())
+                            {
+                                if let Some(bounding_rect) = element.get("bounding_rect") {
+                                    if let (Some(x_val), Some(y_val)) = (
+                                        bounding_rect.get("center_x").and_then(|v| v.as_i64()),
+                                        bounding_rect.get("center_y").and_then(|v| v.as_i64()),
+                                    ) {
+                                        let (x, y) = (x_val as u32, y_val as u32);
+                                        let mut enigo =
+                                            Enigo::new(&Settings::default()).map_err(|e| {
+                                                format!("Failed to initialize automation: {}", e)
+                                            })?;
+                                        enigo
+                                            .move_mouse(x as i32, y as i32, enigo::Coordinate::Abs)
+                                            .map_err(|e| format!("Failed to move mouse: {}", e))?;
+                                        thread::sleep(Duration::from_millis(100));
+                                        enigo
+                                            .button(Button::Left, Direction::Click)
+                                            .map_err(|e| format!("Failed to click: {}", e))?;
+
+                                        let log_msg = format!(
+                                            "Clicked host screen element '{}' at ({}, {})",
+                                            element_name, x, y
+                                        );
+                                        add_log(
+                                            "HOST_SCREEN_CLICK",
+                                            &log_msg,
+                                            Some((x, y)),
+                                            None,
+                                            true,
+                                            None,
+                                        );
+                                        return Ok(format!("✓ {}", log_msg));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Try browser element
+            if let Ok(Some(element)) = find_browser_element_by_description_rust(target_name, None) {
+                // Try to get coordinates from either format
+                let coordinates =
+                    if let Some(center_array) = element.get("center").and_then(|c| c.as_array()) {
+                        // Format: "center": [960, 576]
+                        if center_array.len() >= 2 {
+                            let x = center_array[0].as_i64().unwrap_or(0) as u32;
+                            let y = center_array[1].as_i64().unwrap_or(0) as u32;
+                            Some((x, y))
+                        } else {
+                            None
+                        }
+                    } else if let (Some(x_val), Some(y_val)) = (
+                        element
+                            .get("bounding_rect")
+                            .and_then(|r| r.get("center_x"))
+                            .and_then(|v| v.as_i64()),
+                        element
+                            .get("bounding_rect")
+                            .and_then(|r| r.get("center_y"))
+                            .and_then(|v| v.as_i64()),
+                    ) {
+                        // Format: "bounding_rect": {"center_x": 960, "center_y": 576}
+                        Some((x_val as u32, y_val as u32))
+                    } else {
+                        None
+                    };
+
+                if let Some((x, y)) = coordinates {
+                    let mut enigo = Enigo::new(&Settings::default())
+                        .map_err(|e| format!("Failed to initialize automation: {}", e))?;
+                    enigo
+                        .move_mouse(x as i32, y as i32, enigo::Coordinate::Abs)
+                        .map_err(|e| format!("Failed to move mouse: {}", e))?;
+                    thread::sleep(Duration::from_millis(100));
+                    enigo
+                        .button(Button::Left, Direction::Click)
+                        .map_err(|e| format!("Failed to click: {}", e))?;
+
+                    let found_name = element
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or(target_name);
+                    let log_msg =
+                        format!("Clicked browser element '{}' at ({}, {})", found_name, x, y);
+                    add_log("BROWSER_CLICK", &log_msg, Some((x, y)), None, true, None);
+                    return Ok(format!("✓ {}", log_msg));
+                }
+            }
+
+            // Try desktop UI element
+            if let Ok(Some(element)) = find_ui_element_by_description(target_name) {
+                let (x, y) = (
+                    element.bounding_rect.center_x as u32,
+                    element.bounding_rect.center_y as u32,
+                );
+                let mut enigo = Enigo::new(&Settings::default())
+                    .map_err(|e| format!("Failed to initialize automation: {}", e))?;
+                enigo
+                    .move_mouse(x as i32, y as i32, enigo::Coordinate::Abs)
+                    .map_err(|e| format!("Failed to move mouse: {}", e))?;
+                thread::sleep(Duration::from_millis(100));
+                enigo
+                    .button(Button::Left, Direction::Click)
+                    .map_err(|e| format!("Failed to click: {}", e))?;
+
+                let log_msg = format!("Clicked UI element '{}' at ({}, {})", element.name, x, y);
+                add_log("UI_CLICK", &log_msg, Some((x, y)), None, true, None);
+                return Ok(format!("✓ {}", log_msg));
+            }
+        }
+
+        // Fallback – coordinate-based click if coordinates were provided.
+        if extract_coordinates(instruction).is_some() {
+            return execute_automation_action(instruction);
+        }
+
+        // If we couldn't click anything, surface a clear error so the caller can adjust.
+        if !potential_targets.is_empty() {
+            return Err(format!(
+                "Could not find the UI element(s): '{}'. Please try a different description or use coordinates.",
+                potential_targets.join("', '")
+            ));
+        }
+
+        // No recognised element names – fall through to other handlers.
+    }
+
+    // ---------------------------------------------
+    // 2. TYPE handling
+    // ---------------------------------------------
+    if instruction_lower.starts_with("type ") || instruction_lower.contains(" type \"") {
+        if let Some(text_to_type) = extract_text_to_type(instruction) {
+            // Focus field if target provided
+            if !potential_targets.is_empty() {
+                let target_name = &potential_targets[0];
+                if let Ok(Some(element)) =
+                    find_browser_element_by_description_rust(target_name, None)
+                {
+                    // Try to get coordinates from either format
+                    let coordinates = if let Some(center_array) =
+                        element.get("center").and_then(|c| c.as_array())
+                    {
+                        // Format: "center": [960, 576]
+                        if center_array.len() >= 2 {
+                            let x = center_array[0].as_i64().unwrap_or(0) as u32;
+                            let y = center_array[1].as_i64().unwrap_or(0) as u32;
+                            Some((x, y))
+                        } else {
+                            None
+                        }
+                    } else if let (Some(x_val), Some(y_val)) = (
+                        element
+                            .get("bounding_rect")
+                            .and_then(|r| r.get("center_x"))
+                            .and_then(|v| v.as_i64()),
+                        element
+                            .get("bounding_rect")
+                            .and_then(|r| r.get("center_y"))
+                            .and_then(|v| v.as_i64()),
+                    ) {
+                        // Format: "bounding_rect": {"center_x": 960, "center_y": 576}
+                        Some((x_val as u32, y_val as u32))
+                    } else {
+                        None
+                    };
+
+                    if let Some((x, y)) = coordinates {
+                        let mut enigo = Enigo::new(&Settings::default()).unwrap();
+                        enigo
+                            .move_mouse(x as i32, y as i32, enigo::Coordinate::Abs)
+                            .unwrap();
+                        enigo.button(Button::Left, Direction::Click).unwrap();
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                } else if let Ok(Some(element)) = find_ui_element_by_description(target_name) {
+                    let (x, y) = (
+                        element.bounding_rect.center_x as u32,
+                        element.bounding_rect.center_y as u32,
+                    );
+                    let mut enigo = Enigo::new(&Settings::default()).unwrap();
+                    enigo
+                        .move_mouse(x as i32, y as i32, enigo::Coordinate::Abs)
+                        .unwrap();
+                    enigo.button(Button::Left, Direction::Click).unwrap();
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+
+            // Type the requested text
+            let mut enigo = Enigo::new(&Settings::default())
+                .map_err(|e| format!("Failed to initialize automation: {}", e))?;
+            enigo
+                .text(&text_to_type)
+                .map_err(|e| format!("Failed to type text: {}", e))?;
+            add_log(
+                "TYPE",
+                &format!("Typed text: {}", text_to_type),
+                None,
+                Some(text_to_type.clone()),
+                true,
+                None,
+            );
+            return Ok(format!("✓ Typed: {}", text_to_type));
+        }
+    }
+
+    // ---------------------------------------------
+    // 3. Other (press / scroll) & generic fallback
+    // ---------------------------------------------
+    execute_automation_action(instruction)
+}
+
+// This function will now return a raw image buffer
+async fn capture_screen(window: tauri::Window) -> Result<RgbaImage, String> {
+    // Hide the window to capture what's behind it
+    window
+        .hide()
+        .map_err(|e| format!("Failed to hide window: {}", e))?;
+    // Give the OS a moment to hide the window before capturing.
+    // This duration might need adjustment depending on the OS and system performance.
+    thread::sleep(Duration::from_millis(200));
+
+    let capture_result = (|| {
+        let display =
+            Display::primary().map_err(|e| format!("Failed to get primary display: {}", e))?;
+        let mut capturer =
+            Capturer::new(display).map_err(|e| format!("Failed to create capturer: {}", e))?;
+
+        let (w, h) = (capturer.width(), capturer.height());
+
+        // Try to capture a frame (may need a few attempts)
+        let mut attempts = 0;
+        let frame = loop {
+            match capturer.frame() {
+                Ok(frame) => break frame,
+                Err(error) => {
+                    if attempts > 10 {
+                        return Err(format!(
+                            "Failed to capture screen after 10 attempts: {}",
+                            error
+                        ));
+                    }
+                    attempts += 1;
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        };
+
+        // Convert BGRA to RGBA
+        let mut rgba_data = Vec::with_capacity(frame.len());
+        for bgra in frame.chunks_exact(4) {
+            rgba_data.push(bgra[2]); // R
+            rgba_data.push(bgra[1]); // G
+            rgba_data.push(bgra[0]); // B
+            rgba_data.push(bgra[3]); // A
+        }
+
+        // Create image
+        let mut img = RgbaImage::from_raw(w as u32, h as u32, rgba_data)
+            .ok_or("Failed to create image from raw data")?;
+
+        // Add grid overlay
+        add_grid_overlay(&mut img)?;
+
+        Ok(img) // Return the RgbaImage
+    })();
+
+    // IMPORTANT: Ensure the window is shown again, regardless of capture outcome.
+    window
+        .show()
+        .map_err(|e| format!("Failed to show window: {}", e))?;
+
+    capture_result
 }
 
 #[tauri::command]
@@ -679,12 +1703,24 @@ async fn chat_with_gpt(message: String) -> Result<String, String> {
     let client = Client::new();
 
     let request_body = ChatRequest {
-        model: "gpt-4o-mini",
+        model: "gpt-4.1-nano-2025-04-14",
         messages: vec![ChatMessage {
             role: "user".to_string(),
-            content: message,
+            content: message.clone(),
         }],
     };
+
+    // Debug log: record the prompt being sent to the model
+    if let Ok(json_prompt) = serde_json::to_string(&request_body) {
+        add_log(
+            "PROMPT",
+            "chat_with_gpt",
+            None,
+            Some(json_prompt),
+            true,
+            None,
+        );
+    }
 
     println!("Sending request to OpenAI API...");
 
@@ -747,16 +1783,29 @@ async fn chat_with_vision(message: String, image_data: String) -> Result<String,
                 text: None,
                 image_url: Some(ImageUrl {
                     url: format!("data:image/png;base64,{}", image_data),
+                    detail: "high".to_string(),
                 }),
             },
         ],
     };
 
     let request_body = VisionRequest {
-        model: "gpt-4o-mini",
+        model: "gpt-4.1-nano-2025-04-14",
         messages: vec![vision_message],
         max_tokens: 1000,
     };
+
+    // Debug log: record the prompt being sent to the vision model
+    if let Ok(json_prompt) = serde_json::to_string(&request_body) {
+        add_log(
+            "PROMPT",
+            "chat_with_vision",
+            None,
+            Some(json_prompt),
+            true,
+            None,
+        );
+    }
 
     println!("Sending vision request to OpenAI API...");
 
@@ -834,302 +1883,229 @@ async fn test_env() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn start_automation(goal: String) -> Result<String, String> {
+async fn start_automation(window: tauri::Window, goal: String) -> Result<String, String> {
+    run_full_automation(window, goal).await
+}
+
+#[tauri::command]
+async fn run_full_automation(window: tauri::Window, goal: String) -> Result<String, String> {
     // Log automation start
     add_log(
         "AUTOMATION",
-        &format!("Started automation with goal: {}", goal),
+        &format!("Started full automation with goal: {}", goal),
         None,
         Some(goal.clone()),
         true,
         None,
     );
 
-    // Capture screen first
-    let screenshot = capture_screen().await?;
+    let max_steps = 20; // Safety limit to prevent infinite loops
+    let mut step_count = 0;
+    let mut previous_instruction: Option<String> = None;
+    let mut all_steps = Vec::new();
 
-    // Get first instruction from the model
-    let automation_prompt = format!(
-        "AUTOMATION TASK: {}
+    while step_count < max_steps {
+        step_count += 1;
 
-You are an automation assistant that controls computer actions. I will provide screenshots with a grid overlay for precise positioning.
+        // Log current step
+        add_log(
+            "AUTOMATION",
+            &format!("Executing step {}/{}", step_count, max_steps),
+            None,
+            Some(format!("Goal: {}", goal)),
+            true,
+            None,
+        );
 
-🎯 GRID SYSTEM:
-- Grid squares are 75x75 pixels each
-- Coordinates are labeled at intersections like (75,75), (150,150), (225,225), etc.
-- Red grid lines help you identify precise locations
-- Use coordinates from the grid labels for maximum accuracy
+        // Capture screen
+        let screen_image = capture_screen(window.clone()).await?;
+        let (width, height) = screen_image.dimensions();
 
-⚡ AVAILABLE ACTIONS:
+        // Encode the full image for the vision model
+        let screenshot_b64 = {
+            let mut png_bytes = Vec::new();
+            let mut cursor = Cursor::new(&mut png_bytes);
+            screen_image
+                .write_to(&mut cursor, ImageFormat::Png)
+                .map_err(|e| format!("Failed to encode full PNG: {}", e))?;
+            BASE64.encode(&png_bytes)
+        };
 
-1. CLICK ACTIONS:
-   - Format: 'Click [description] at coordinates (x, y)'
-   - Examples: 
-     • 'Click the search button at coordinates (400, 150)'
-     • 'Click the menu icon at coordinates (50, 100)'
-     • 'Click coordinates (700, 300)' (if no clear element description)
+        // Create automation prompt
+        let automation_prompt = create_enhanced_automation_prompt(
+            &goal,
+            previous_instruction.as_deref(),
+            Some(step_count - 1),
+            width,
+            height,
+        );
 
-2. TYPING ACTIONS:
-   - Format: 'Type \"[exact text]\" [optional location description]'
-   - Examples:
-     • 'Type \"Hello World\" in the text field'
-     • 'Type \"john@example.com\"'
-     • 'Type \"password123\"'
+        // Debug log: record automation prompt sent to model
+        add_log(
+            "PROMPT",
+            &format!("run_full_automation_step_{}", step_count),
+            None,
+            Some(automation_prompt.clone()),
+            true,
+            None,
+        );
 
-3. KEYBOARD SHORTCUTS & KEYS:
-   - Format: 'Press [key name]'
-   - Supported keys: Enter, Return, Tab, Escape, Space
-   - Examples:
-     • 'Press Enter' (submit forms, confirm)
-     • 'Press Tab' (navigate fields)
-     • 'Press Escape' (close dialogs)
+        println!(
+            "\n\n--- STEP {} PROMPT SENT TO MODEL ---\n{}\n--- END OF PROMPT ---\n",
+            step_count, automation_prompt
+        );
 
-4. SCROLL ACTIONS:
-   - Format: 'Scroll [direction]'
-   - Examples:
-     • 'Scroll down' (scroll down the page)
-     • 'Scroll up' (scroll up the page)
+        // Get instruction from the model
+        let response = match chat_with_vision(automation_prompt, screenshot_b64.clone()).await {
+            Ok(response) => response,
+            Err(error) => {
+                add_log(
+                    "AUTOMATION",
+                    &format!(
+                        "Failed to get automation instruction for step {}",
+                        step_count
+                    ),
+                    None,
+                    None,
+                    false,
+                    Some(error.clone()),
+                );
+                return Err(format!("Step {}: {}", step_count, error));
+            }
+        };
 
-📋 RESPONSE RULES:
-1. Give ONE specific action at a time
-2. Always use exact grid coordinates when clicking
-3. Be precise about what you're clicking (button, link, field, etc.)
-4. For typing, use exact quotes around the text
-5. If goal is completed, say 'TASK COMPLETED - [brief description]'
+        // Log AI instruction
+        add_log(
+            "AI_INSTRUCTION",
+            &format!("Step {}: {}", step_count, response),
+            None,
+            Some(response.clone()),
+            true,
+            None,
+        );
 
-✅ GOOD EXAMPLES:
-- 'Click the login button at coordinates (350, 450)'
-- 'Type \"admin\" in the username field'
-- 'Press Enter to submit the form'
-- 'Scroll down to see more options'
-- 'TASK COMPLETED - Successfully logged into the system'
-
-❌ AVOID:
-- Vague coordinates like 'near the top' or 'bottom right'
-- Missing quotes around text to type
-- Multiple actions in one instruction
-- Unclear element descriptions
-
-What is the first action I should take to accomplish this goal?", 
-        goal
-    );
-
-    match chat_with_vision(automation_prompt, screenshot.clone()).await {
-        Ok(response) => {
-            // Log automation step
+        // Check if task is completed
+        if response.contains("TASK COMPLETED") {
+            all_steps.push(format!("Step {}: {}", step_count, response));
             add_log(
-                "AI_INSTRUCTION",
-                &format!("Step 1: {}", response),
+                "AUTOMATION",
+                "Task completed successfully",
                 None,
-                Some(response.clone()),
+                Some(format!("Completed in {} steps", step_count)),
                 true,
                 None,
             );
 
-            // Execute the automation action
-            let final_response = match execute_automation_action(&response) {
-                Ok(execution_result) => {
-                    // Return both the instruction and execution result
-                    format!("{}\n{}", response, execution_result)
-                }
-                Err(execution_error) => {
-                    // Log execution error but still return the instruction
-                    add_log(
-                        "EXECUTION_ERROR",
-                        &format!("Failed to execute: {}", execution_error),
-                        None,
-                        Some(response.clone()),
-                        false,
-                        Some(execution_error.clone()),
-                    );
-                    format!("{}\n❌ Execution failed: {}", response, execution_error)
-                }
+            let final_response = AutomationResponse {
+                instruction: format!(
+                    "✅ Task completed in {} steps!\n\nSteps taken:\n{}",
+                    step_count,
+                    all_steps.join("\n")
+                ),
+                completed: true,
+                next_action: "done".to_string(),
+                coordinates: None,
+                text_to_type: None,
+                screenshot: Some(screenshot_b64),
             };
 
-            // Return response with screenshot
-            let automation_response = AutomationResponse {
-                instruction: final_response,
-                completed: response.contains("TASK COMPLETED"),
-                next_action: "click".to_string(), // Default action type
-                coordinates: extract_coordinates(&response),
-                text_to_type: extract_text_to_type(&response),
-                screenshot: Some(screenshot),
-            };
+            return Ok(serde_json::to_string(&final_response).unwrap());
+        }
 
-            Ok(serde_json::to_string(&automation_response).unwrap())
+        // Execute the action
+        match execute_enhanced_automation_action(&response) {
+            Ok(execution_result) => {
+                add_log(
+                    "EXECUTION_SUCCESS",
+                    &format!(
+                        "Step {} executed successfully: {}",
+                        step_count, execution_result
+                    ),
+                    None,
+                    Some(response.clone()),
+                    true,
+                    None,
+                );
+                all_steps.push(format!(
+                    "Step {}: {} → {}",
+                    step_count, response, execution_result
+                ));
+            }
+            Err(execution_error) => {
+                add_log(
+                    "EXECUTION_ERROR",
+                    &format!("Step {} failed: {}", step_count, execution_error),
+                    None,
+                    Some(response.clone()),
+                    false,
+                    Some(execution_error.clone()),
+                );
+                all_steps.push(format!(
+                    "Step {}: {} → ERROR: {}",
+                    step_count, response, execution_error
+                ));
+            }
         }
-        Err(error) => {
-            // Log automation error
-            add_log(
-                "AUTOMATION",
-                "Failed to get automation instruction",
-                None,
-                None,
-                false,
-                Some(error.clone()),
-            );
-            Err(error)
-        }
+
+        // Store current instruction for next iteration
+        previous_instruction = Some(response);
+
+        // Small delay between steps to allow UI to update
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
     }
+
+    // If we reach here, we've hit the max steps limit
+    add_log(
+        "AUTOMATION",
+        "Maximum steps reached without completion",
+        None,
+        Some(format!("Reached max steps: {}", max_steps)),
+        false,
+        None,
+    );
+
+    let final_response = AutomationResponse {
+        instruction: format!(
+            "⚠️ Automation stopped after {} steps (maximum limit reached).\n\nSteps taken:\n{}",
+            max_steps,
+            all_steps.join("\n")
+        ),
+        completed: false,
+        next_action: "timeout".to_string(),
+        coordinates: None,
+        text_to_type: None,
+        screenshot: None,
+    };
+
+    Ok(serde_json::to_string(&final_response).unwrap())
 }
 
 #[tauri::command]
 async fn continue_automation(
+    window: tauri::Window,
     goal: String,
     previous_instruction: String,
     step_count: u32,
 ) -> Result<String, String> {
-    // Log automation continuation
-    add_log(
-        "AUTOMATION",
-        &format!("Continuing automation - Step {}", step_count + 1),
-        None,
-        Some(format!(
-            "Goal: {} | Previous: {}",
-            goal, previous_instruction
-        )),
-        true,
-        None,
-    );
-
-    // Capture current screen state
-    let screenshot = capture_screen().await?;
-
-    // Create context-aware prompt
-    let automation_prompt = format!(
-        "AUTOMATION TASK CONTINUATION: {}
-
-Previous step #{}: {}
-
-I've taken the previous action. Here's the current screenshot with grid overlay.
-
-🎯 GRID SYSTEM:
-- Grid squares are 50x50 pixels each
-- Coordinates are labeled at intersections like (50,50), (100,100), (150,150), etc.
-- Red grid lines help you identify precise locations
-- Use coordinates from the grid labels for maximum accuracy
-
-⚡ AVAILABLE ACTIONS:
-
-1. CLICK ACTIONS:
-   - Format: 'Click [description] at coordinates (x, y)'
-   - Examples: 
-     • 'Click the search button at coordinates (400, 150)'
-     • 'Click the menu icon at coordinates (50, 100)'
-     • 'Click coordinates (700, 300)' (if no clear element description)
-
-2. TYPING ACTIONS:
-   - Format: 'Type \"[exact text]\" [optional location description]'
-   - Examples:
-     • 'Type \"Hello World\" in the text field'
-     • 'Type \"john@example.com\"'
-     • 'Type \"password123\"'
-
-3. KEYBOARD SHORTCUTS & KEYS:
-   - Format: 'Press [key name]'
-   - Supported keys: Enter, Return, Tab, Escape, Space
-   - Examples:
-     • 'Press Enter' (submit forms, confirm)
-     • 'Press Tab' (navigate fields)
-     • 'Press Escape' (close dialogs)
-
-4. SCROLL ACTIONS:
-   - Format: 'Scroll [direction]'
-   - Examples:
-     • 'Scroll down' (scroll down the page)
-     • 'Scroll up' (scroll up the page)
-
-📋 RESPONSE RULES:
-1. Give ONE specific action at a time
-2. Always use exact grid coordinates when clicking
-3. Be precise about what you're clicking (button, link, field, etc.)
-4. For typing, use exact quotes around the text
-5. Consider what changed from the previous action
-6. If goal is completed, say 'TASK COMPLETED - [brief description]'
-
-✅ GOOD EXAMPLES:
-- 'Click the login button at coordinates (350, 450)'
-- 'Type \"admin\" in the username field'
-- 'Press Enter to submit the form'
-- 'Scroll down to see more options'
-- 'TASK COMPLETED - Successfully logged into the system'
-
-❌ AVOID:
-- Vague coordinates like 'near the top' or 'bottom right'
-- Missing quotes around text to type
-- Multiple actions in one instruction
-- Unclear element descriptions
-
-Analyze the current state and provide the NEXT SINGLE ACTION to continue toward the goal. What should I do next?", 
-        goal, step_count, previous_instruction
-    );
-
-    match chat_with_vision(automation_prompt, screenshot.clone()).await {
-        Ok(response) => {
-            // Log automation step
-            add_log(
-                "AI_INSTRUCTION",
-                &format!("Step {}: {}", step_count + 1, response),
-                None,
-                Some(response.clone()),
-                true,
-                None,
-            );
-
-            // Execute the automation action
-            let final_response = match execute_automation_action(&response) {
-                Ok(execution_result) => {
-                    // Return both the instruction and execution result
-                    format!("{}\n{}", response, execution_result)
-                }
-                Err(execution_error) => {
-                    // Log execution error but still return the instruction
-                    add_log(
-                        "EXECUTION_ERROR",
-                        &format!("Failed to execute: {}", execution_error),
-                        None,
-                        Some(response.clone()),
-                        false,
-                        Some(execution_error.clone()),
-                    );
-                    format!("{}\n❌ Execution failed: {}", response, execution_error)
-                }
-            };
-
-            // Return response with screenshot
-            let automation_response = AutomationResponse {
-                instruction: final_response,
-                completed: response.contains("TASK COMPLETED"),
-                next_action: "click".to_string(), // Default action type
-                coordinates: extract_coordinates(&response),
-                text_to_type: extract_text_to_type(&response),
-                screenshot: Some(screenshot),
-            };
-
-            Ok(serde_json::to_string(&automation_response).unwrap())
-        }
-        Err(error) => {
-            // Log automation error
-            add_log(
-                "AUTOMATION",
-                &format!(
-                    "Failed to get automation instruction for step {}",
-                    step_count + 1
-                ),
-                None,
-                None,
-                false,
-                Some(error.clone()),
-            );
-            Err(error)
-        }
-    }
+    // For backwards compatibility, redirect to the new full automation system
+    // This will restart the automation process rather than continuing from a specific step
+    run_full_automation(window, goal).await
 }
 
 #[tauri::command]
-async fn get_automation_screenshot() -> Result<String, String> {
-    // Simply capture and return screenshot with grid
-    capture_screen().await
+async fn get_automation_screenshot(window: tauri::Window) -> Result<String, String> {
+    // Get the raw image
+    let img = capture_screen(window).await?;
+
+    // Encode it to PNG
+    let mut png_bytes = Vec::new();
+    let mut cursor = Cursor::new(&mut png_bytes);
+    img.write_to(&mut cursor, ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode PNG: {}", e))?;
+
+    // Encode to base64
+    let base64_image = BASE64.encode(&png_bytes);
+    Ok(base64_image)
 }
 
 #[tauri::command]
@@ -1173,6 +2149,72 @@ async fn log_manual_action(
     Ok("Action logged successfully".to_string())
 }
 
+#[tauri::command]
+async fn discover_ui_elements_command() -> Result<Vec<UIElement>, String> {
+    discover_ui_elements()
+}
+
+#[tauri::command]
+async fn get_ui_summary_command() -> Result<UIElementSummary, String> {
+    get_ui_elements_summary()
+}
+
+#[tauri::command]
+async fn find_ui_element_command(description: String) -> Result<Option<UIElement>, String> {
+    find_ui_element_by_description(&description)
+}
+
+#[tauri::command]
+async fn execute_ui_action_command(instruction: String) -> Result<String, String> {
+    execute_enhanced_automation_action(&instruction)
+}
+
+// Browser Automation Commands
+#[tauri::command]
+async fn discover_browser_elements_command(
+    target_browser: Option<String>,
+) -> Result<serde_json::Value, String> {
+    discover_browser_elements_rust(target_browser.as_deref())
+}
+
+#[tauri::command]
+async fn get_browser_summary_command(
+    target_browser: Option<String>,
+) -> Result<serde_json::Value, String> {
+    get_browser_elements_summary_rust(target_browser.as_deref())
+}
+
+#[tauri::command]
+async fn find_browser_element_command(
+    description: String,
+    target_browser: Option<String>,
+) -> Result<Option<serde_json::Value>, String> {
+    find_browser_element_by_description_rust(&description, target_browser.as_deref())
+}
+
+#[tauri::command]
+async fn execute_browser_action_command(instruction: String) -> Result<String, String> {
+    // For now, use the enhanced automation action which includes UI automation
+    // In the future, we could add browser-specific automation here
+    execute_enhanced_automation_action(&instruction)
+}
+
+#[tauri::command]
+async fn get_chrome_elements_command() -> Result<serde_json::Value, String> {
+    discover_browser_elements_rust(Some("chrome"))
+}
+
+// Host Screen Detection Commands
+#[tauri::command]
+async fn discover_host_screen_elements_command() -> Result<serde_json::Value, String> {
+    discover_host_screen_elements()
+}
+
+#[tauri::command]
+async fn get_host_screen_summary_command() -> Result<serde_json::Value, String> {
+    get_host_screen_elements_summary()
+}
+
 fn main() {
     // Initialize logging system
     init_logging();
@@ -1180,15 +2222,26 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             chat_with_gpt,
-            capture_screen,
             chat_with_vision,
             test_env,
             start_automation,
+            run_full_automation,
             continue_automation,
             get_automation_screenshot,
             get_action_logs,
             clear_action_logs,
-            log_manual_action
+            log_manual_action,
+            discover_ui_elements_command,
+            get_ui_summary_command,
+            find_ui_element_command,
+            execute_ui_action_command,
+            discover_browser_elements_command,
+            get_browser_summary_command,
+            find_browser_element_command,
+            execute_browser_action_command,
+            get_chrome_elements_command,
+            discover_host_screen_elements_command,
+            get_host_screen_summary_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
