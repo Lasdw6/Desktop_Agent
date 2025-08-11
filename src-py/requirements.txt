@@ -13,3 +13,4 @@ smolagents
 opencv-python
 numpy
 pytesseract 
+uiautomation

@@ -1,12 +1,12 @@
-# Desktop Assistant (Tauri + Rust + Python)
+# Desktop Assistant (Electron + React + Python)
 
-A cross-platform desktop automation assistant that combines a Tauri (Rust + React) desktop app with a Python automation/runtime service. It can analyze your live desktop screen with computer vision + OCR, discover actionable UI elements, enhance LLM prompts with real-time context, and execute actions using element-aware clicks, typing, keyboard shortcuts, and coordinate fallbacks. It also includes specialized web browser automation for Chrome/Firefox/Edge on Windows via UI Automation.
+A cross-platform desktop automation assistant that combines an Electron (Node + React) desktop app with a Python automation/runtime service. It can analyze your live desktop screen with computer vision + OCR, discover actionable UI elements, enhance LLM prompts with real-time context, and execute actions using element-aware clicks, typing, keyboard shortcuts, and coordinate fallbacks. It also includes specialized web browser automation for Chrome/Firefox/Edge on Windows via UI Automation.
 
 ---
 
 ## Overview
 
-- Desktop app built with Tauri 2 (Rust backend, React/Vite frontend)
+- Desktop app built with Electron (main process) + React/Vite renderer
 - Python backend providing:
   - Host screen computer-vision UI element discovery (no Docker required)
   - OCR-based text extraction (Tesseract, optional)
@@ -51,9 +51,9 @@ A cross-platform desktop automation assistant that combines a Tauri (Rust + Reac
 ## Architecture
 
 - Frontend: React + Vite (`src/`)
-- Desktop shell: Tauri 2 (`src-tauri/`)
-  - Window config: always-on-top command surface, resizable
-  - Rust backend exposes Tauri commands (see integration summary) and orchestrates LLM + Python calls
+- Desktop shell: Electron (see `electron/main.js`)
+  - Main process creates the BrowserWindow loading the Vite dev server or built files
+  - Renderer talks directly to Python HTTP APIs
 - Automation backend: Python Flask service (`src-py/`)
   - Endpoints for screenshots, UI discovery/summaries, element search, action execution
   - GPT text/vision endpoints
@@ -62,11 +62,11 @@ A cross-platform desktop automation assistant that combines a Tauri (Rust + Reac
 Data flow (simplified):
 
 1. User triggers automation or provides a goal
-2. Rust backend (Tauri) invokes Python service to capture screenshot + discover host screen elements
-3. Backend combines: screenshot + host screen elements + (optional) browser/desktop context → crafts enhanced LLM prompt
-4. LLM responds with element-aware actions → backend executes via Python (element-based preferred; fallback to coordinates)
+2. Renderer (React) calls Python service to capture screenshot + discover host screen elements
+3. Renderer combines: screenshot + host screen elements + (optional) browser/desktop context → crafts enhanced LLM prompt
+4. LLM responds with element-aware actions → renderer requests Python to execute (element-based preferred; fallback to coordinates)
 
-For detailed integration notes, see `LLM_INTEGRATION_SUMMARY.md`.
+For historical Tauri integration notes, see `LLM_INTEGRATION_SUMMARY.md`.
 
 ---
 
@@ -127,7 +127,7 @@ Base: `http://localhost:5000`
 - `src-py/main.py`
   - Flask app exposing HTTP endpoints for screenshots, discovery, GPT, and action execution
 - `LLM_INTEGRATION_SUMMARY.md`
-  - Documents how Tauri/Rust integrates host screen data into LLM prompts and exposes commands such as `discover_host_screen_elements_command` and `get_host_screen_summary_command`
+  - Historical documentation when the app used Tauri/Rust. Now the renderer orchestrates Electron + Python HTTP directly
 
 ---
 
@@ -140,7 +140,7 @@ Desktop_Agent/
   UI_AUTOMATION_BRIDGE.md
   SCREENENV_MIGRATION_README.md
   src/                # React frontend (Vite + TS)
-  src-tauri/          # Tauri 2 app (Rust backend)
+  electron/           # Electron main process (this folder will be created)
   src-py/             # Python Flask automation service
   test_*.py           # Demo & test scripts for components
 ```
@@ -152,7 +152,7 @@ Desktop_Agent/
 Prerequisites:
 
 - Node.js 18+
-- Rust (for Tauri 2)
+- Electron runtime (installed via devDependencies)
 - Python 3.9+
 - Pip packages: `pip install -r src-py/requirements.txt`
 - Optional for OCR: Tesseract
@@ -164,7 +164,7 @@ Prerequisites:
 Install frontend deps:
 
 ```
-npm install
+   npm install
 ```
 
 Install Python deps:
@@ -177,7 +177,7 @@ pip install -r src-py/requirements.txt
 
 ## Running
 
-Option A: Run Python service + Tauri app separately (recommended for development)
+Option A: Run Python service + Electron app separately (recommended for development)
 
 1. Start Python backend:
 
@@ -185,22 +185,21 @@ Option A: Run Python service + Tauri app separately (recommended for development
 python src-py/main.py
 ```
 
-2. In another terminal, start the Tauri app:
+2. In another terminal, start the Electron app:
 
 ```
-npm run tauri dev
+npm run dev
 ```
 
-Option B: Use Tauri dev to orchestrate frontend
+Option B: Start renderer then Electron separately
 
-- `src-tauri/tauri.conf.json` runs `npm run dev` before dev and points to `http://localhost:1420`
+- Terminal 1: `npm run dev:renderer`
+- Terminal 2: `npm run dev:electron`
 
 Build:
 
 ```
 npm run build
-# followed by tauri bundling
-npm run tauri build
 ```
 
 ---
@@ -253,7 +252,7 @@ These scripts print summaries to the console and write artifacts like `integrati
 
 ## Configuration Notes
 
-- `src-tauri/tauri.conf.json` configures an always-on-top window titled "Desktop Assistant"
+- Electron main process configures the BrowserWindow titled "Desktop Assistant"
 - Python service loads `.env` from several common locations; verify your `OPENAI_API_KEY` is discoverable
 - Browser automation requires an open browser window and currently targets Windows via `uiautomation`
 

@@ -1,8 +1,4 @@
 import { useState, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { LogicalSize, LogicalPosition } from "@tauri-apps/api/dpi";
-import { primaryMonitor } from "@tauri-apps/api/window";
 import "./App.css";
 
 interface Message {
@@ -10,6 +6,7 @@ interface Message {
   sender: "user" | "bot";
   hasImage?: boolean;
   imageData?: string;
+  prompt?: string;
 }
 
 interface AutomationState {
@@ -29,6 +26,7 @@ interface AutomationResponse {
   coordinates?: [number, number];
   text_to_type?: string;
   screenshot?: string;
+  prompt?: string;
 }
 
 interface ActionLog {
@@ -42,6 +40,85 @@ interface ActionLog {
   error_message?: string;
 }
 
+// --- Simple orchestration helpers (Electron + Python backend) ---
+async function getScreenshot(): Promise<string | null> {
+  try {
+    const res = await fetch("http://localhost:5000/screenshot");
+    const data = await res.json();
+    return data.screenshot || null;
+  } catch {
+    return null;
+  }
+}
+
+async function getUiSummary(): Promise<any | null> {
+  try {
+    // Hide overlay so our own UI is not included in Windows UIA discovery
+    await (window as any).overlayAPI?.hideOverlay?.();
+    await new Promise((r) => setTimeout(r, 120));
+
+    const res = await fetch("http://localhost:5000/ui-summary?method=windows");
+    const data = await res.json();
+    return data;
+  } catch {
+    return null;
+  } finally {
+    try { await (window as any).overlayAPI?.showOverlay?.(); } catch {}
+  }
+}
+
+async function chatWithVision(message: string, imageData: string): Promise<string> {
+  const res = await fetch("http://localhost:5000/chat-vision", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, image_data: imageData })
+  });
+  const data = await res.json();
+  return data.response || "";
+}
+
+async function executeAction(instruction: string): Promise<string> {
+  const res = await fetch("http://localhost:5000/execute-action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ instruction })
+  });
+  const data = await res.json();
+  return data.result || data.error || "";
+}
+
+async function orchestrateStart(goal: string): Promise<AutomationResponse> {
+  const screenshot = await getScreenshot();
+  const summary = await getUiSummary();
+  const prompt = `AUTOMATION TASK: ${goal}\n\nHOST SCREEN SUMMARY:\n${JSON.stringify(summary, null, 2)}\n\nPlease output a single next action as a concise instruction. Prefer element-aware actions (e.g., Click \"[ElementName]\"). Fallback to coordinates as \"Click (x, y)\". If typing, use \"Type \"text\"\".`;
+  const visionText = screenshot ? await chatWithVision(prompt, screenshot) : "";
+  const finalInstruction = (visionText && visionText.trim()) || goal;
+  await executeAction(finalInstruction);
+  return {
+    instruction: finalInstruction,
+    completed: false,
+    next_action: finalInstruction,
+    screenshot: screenshot || undefined,
+    prompt
+  };
+}
+
+async function orchestrateContinue(goal: string, previousInstruction: string, stepCount: number): Promise<AutomationResponse> {
+  const screenshot = await getScreenshot();
+  const summary = await getUiSummary();
+  const prompt = `CONTINUE AUTOMATION (step ${stepCount + 1}) for: ${goal}\nPrevious instruction: ${previousInstruction}\n\nHOST SCREEN SUMMARY:\n${JSON.stringify(summary, null, 2)}\n\nOutput the next single action.`;
+  const visionText = screenshot ? await chatWithVision(prompt, screenshot) : "";
+  const finalInstruction = (visionText && visionText.trim()) || previousInstruction || `Click (10, 10)`;
+  await executeAction(finalInstruction);
+  return {
+    instruction: finalInstruction,
+    completed: false,
+    next_action: finalInstruction,
+    screenshot: screenshot || undefined,
+    prompt
+  };
+}
+
 function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -49,6 +126,13 @@ function App() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [actionLogs, setActionLogs] = useState<ActionLog[]>([]);
   const [showActionLogs, setShowActionLogs] = useState(false);
+  const [panelOpen, setPanelOpen] = useState<boolean>(true);
+  const [panelOpaque, setPanelOpaque] = useState<boolean>(false);
+  // Removed unused expandedPrompts state
+  type NotchDock = 'left' | 'center' | 'right';
+  const [notchDock, setNotchDock] = useState<NotchDock>('center');
+  const [isDraggingNotch, setIsDraggingNotch] = useState<boolean>(false);
+  const [dragX, setDragX] = useState<number>(0);
 
   const [automationState, setAutomationState] = useState<AutomationState>({
     isActive: false,
@@ -62,35 +146,7 @@ function App() {
   const [countdown, setCountdown] = useState<number>(0);
 
   // Simple auto-resize function
-  const autoResize = async () => {
-    try {
-      const window = getCurrentWindow();
-      
-      // Calculate height based on content
-      let height = 280; // Base height (header + input + padding)
-      height += messages.length * 100; // 100px per message
-      if (capturedImage) height += 180; // Image preview
-      if (isLoading) height += 60; // Loading indicator
-      
-      // Apply constraints
-      const finalHeight = Math.max(Math.min(height, 900), 400);
-      
-      console.log(`Auto-resize: ${messages.length} messages, image: ${!!capturedImage}, height: ${finalHeight}`);
-      
-      await window.setSize(new LogicalSize(800, finalHeight));
-      
-      // Center the window
-      const monitor = await primaryMonitor();
-      if (monitor) {
-        const x = (monitor.size.width - 800) / 2;
-        const y = (monitor.size.height - finalHeight) / 2;
-        await window.setPosition(new LogicalPosition(x, Math.max(0, y)));
-      }
-      
-    } catch (error) {
-      console.error("Auto-resize error:", error);
-    }
-  };
+  const autoResize = async () => {};
 
   // Trigger resize when content changes
   useEffect(() => {
@@ -112,19 +168,14 @@ function App() {
     setMessages(prev => [...prev, continueMessage]);
 
     try {
-      const responseJson = await invoke<string>("continue_automation", {
-        goal: automationState.goal,
-        previousInstruction: automationState.lastInstruction,
-        stepCount: automationState.stepCount,
-      });
-
-      const response: AutomationResponse = JSON.parse(responseJson);
+      const response = await orchestrateContinue(automationState.goal, automationState.lastInstruction, automationState.stepCount);
 
       const botMessage: Message = {
         text: `Step ${automationState.stepCount + 1}: ${response.instruction}`,
         sender: "bot",
         hasImage: !!response.screenshot,
         imageData: response.screenshot,
+        prompt: response.prompt,
       };
       setMessages(prev => [...prev, botMessage]);
 
@@ -173,19 +224,71 @@ function App() {
   }, [automationState.isActive, automationState.isAutomatic, automationState.stepCount, isLoading, automationState.completed, continueAutomation]);
 
   // Manual resize for testing
-  const manualResize = () => {
-    console.log("Manual resize triggered");
-    autoResize();
+  const manualResize = () => {};
+
+  // Notch drag handlers
+  const onNotchDragStart = (e: React.MouseEvent) => {
+    (window as any).overlayAPI?.setInteractive(true);
+    setIsDraggingNotch(true);
+    setDragX(e.clientX);
+    // prevent text selection while dragging
+    e.preventDefault();
+  };
+
+  const onGlobalMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDraggingNotch) return;
+    setDragX(e.clientX);
+  }, [isDraggingNotch]);
+
+  const onGlobalMouseUp = useCallback(() => {
+    if (!isDraggingNotch) return;
+    const w = window.innerWidth;
+    const x = dragX;
+    const edgeThreshold = Math.max(120, Math.floor(w * 0.1));
+    if (x <= edgeThreshold) setNotchDock('left');
+    else if (x >= w - edgeThreshold) setNotchDock('right');
+    else setNotchDock('center');
+    setIsDraggingNotch(false);
+    (window as any).overlayAPI?.setInteractive(false);
+  }, [isDraggingNotch, dragX]);
+
+  useEffect(() => {
+    window.addEventListener('mousemove', onGlobalMouseMove);
+    window.addEventListener('mouseup', onGlobalMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onGlobalMouseMove);
+      window.removeEventListener('mouseup', onGlobalMouseUp);
+    };
+  }, [onGlobalMouseMove, onGlobalMouseUp]);
+
+  const getPreviewDock = (): 'left' | 'center' | 'right' => {
+    const w = window.innerWidth;
+    const x = dragX;
+    const edgeThreshold = Math.max(120, Math.floor(w * 0.1));
+    if (x <= edgeThreshold) return 'left';
+    if (x >= w - edgeThreshold) return 'right';
+    return 'center';
   };
 
 
 
   const captureScreen = async () => {
     try {
-      const imageData = await invoke<string>("capture_screen");
-      setCapturedImage(imageData);
+      // Hide overlay to avoid capturing it in the screenshot
+      await (window as any).overlayAPI?.hideOverlay?.();
+      // Slight delay to ensure the window is hidden by the OS compositor
+      await new Promise((r) => setTimeout(r, 120));
+
+      const res = await fetch("http://localhost:5000/screenshot");
+      const json = await res.json();
+
+      // Show overlay back
+      await (window as any).overlayAPI?.showOverlay?.();
+
+      if (json.screenshot) setCapturedImage(json.screenshot);
     } catch (error) {
       console.error("Capture error:", error);
+      try { await (window as any).overlayAPI?.showOverlay?.(); } catch {}
     }
   };
 
@@ -206,13 +309,22 @@ function App() {
     try {
       let response: string;
       if (capturedImage) {
-        response = await invoke<string>("chat_with_vision", {
-          message: input || "What do you see in this image?",
-          imageData: capturedImage,
+        const res = await fetch("http://localhost:5000/chat-vision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: input || "What do you see in this image?", image_data: capturedImage })
         });
+        const data = await res.json();
+        response = (data.response && String(data.response).trim()) || data.error || "(no response)";
         setCapturedImage(null);
       } else {
-        response = await invoke<string>("chat_with_gpt", { message: input });
+        const res = await fetch("http://localhost:5000/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: input })
+        });
+        const data = await res.json();
+        response = (data.response && String(data.response).trim()) || data.error || "(no response)";
       }
 
       const botMessage: Message = {
@@ -254,14 +366,14 @@ function App() {
     setMessages(prev => [...prev, userMessage]);
 
     try {
-      const responseJson = await invoke<string>("start_automation", { goal });
-      const response: AutomationResponse = JSON.parse(responseJson);
+      const response = await orchestrateStart(goal);
       
       const botMessage: Message = {
         text: `Step 1: ${response.instruction}`,
         sender: "bot",
         hasImage: !!response.screenshot,
         imageData: response.screenshot,
+        prompt: response.prompt,
       };
       setMessages(prev => [...prev, botMessage]);
 
@@ -326,8 +438,9 @@ function App() {
   // Action Log Functions
   const fetchActionLogs = async () => {
     try {
-      const logs = await invoke<ActionLog[]>("get_action_logs");
-      setActionLogs(logs);
+      const res = await fetch("http://localhost:5000/action-logs");
+      const logs = await res.json();
+      setActionLogs(Array.isArray(logs) ? logs : []);
     } catch (error) {
       console.error("Failed to fetch action logs:", error);
     }
@@ -335,7 +448,7 @@ function App() {
 
   const clearActionLogs = async () => {
     try {
-      await invoke<string>("clear_action_logs");
+      await fetch("http://localhost:5000/clear-logs", { method: "POST" });
       setActionLogs([]);
     } catch (error) {
       console.error("Failed to clear action logs:", error);
@@ -377,10 +490,36 @@ function App() {
   };
 
   return (
-    <div className="app">
-      <div className="chat-header">
-        <h1>🤖 Desktop Assistant</h1>
-        <div className="header-controls">
+    <div className="app" style={{ pointerEvents: 'none' }}>
+      {(() => {
+        const dockToRender = isDraggingNotch ? getPreviewDock() : notchDock;
+        return (
+      <div
+        className={`notch ${dockToRender}`}
+        style={{ pointerEvents: 'auto' }}
+        onMouseEnter={() => (window as any).overlayAPI?.setInteractive(true)}
+        onMouseLeave={() => { if (!isDraggingNotch) (window as any).overlayAPI?.setInteractive(false); }}
+        onMouseDown={onNotchDragStart}
+      >
+        <div className="title">Desktop Assistant</div>
+        <div className="controls">
+          <button
+            className="pill-button"
+            onClick={() => {
+              setPanelOpen((prev) => {
+                const next = !prev;
+                if (next) setPanelOpaque(true);
+                return next;
+              });
+            }}
+          >
+            {panelOpen ? "Hide" : "Show"}
+          </button>
+          <div
+            className="drag-handle"
+            title="Drag to move (snaps left/center/right)"
+            onMouseDown={onNotchDragStart}
+          />
           {automationState.isActive && (
             <>
               {!automationState.isAutomatic && (
@@ -422,26 +561,28 @@ function App() {
               </button>
             </>
           )}
-          <button onClick={manualResize} className="resize-button" title="Manual Resize">
-            📏
-          </button>
-          <button onClick={async () => {
-            try {
-              const result = await invoke<string>("test_env");
-              alert(result);
-            } catch (error) {
-              alert(`Test failed: ${error}`);
-            }
-          }} className="resize-button" title="Test API Key">
-            🔑
-          </button>
+          <button className="pill-button" onClick={manualResize} title="Manual Resize">📏</button>
           <button onClick={toggleActionLogs} className={showActionLogs ? "action-log-button active" : "action-log-button"} title="Action Logs">
             📋
           </button>
         </div>
       </div>
+        );})()}
 
-      <div className="chat-messages">
+      {panelOpen && (() => { const dockToRender = isDraggingNotch ? getPreviewDock() : notchDock; return (
+      <div
+        className={`panel${panelOpaque ? ' opaque' : ''}${dockToRender === 'center' ? '' : ' vertical ' + dockToRender}`}
+        style={{ pointerEvents: 'auto' }}
+        onMouseEnter={() => (window as any).overlayAPI?.setInteractive(true)}
+        onMouseLeave={() => { if (!isDraggingNotch) (window as any).overlayAPI?.setInteractive(false); }}
+        onFocusCapture={() => setPanelOpaque(true)}
+        onBlurCapture={() => setPanelOpaque(false)}
+      >
+        <div className="chat-header">
+          <h1>🤖 Desktop Assistant</h1>
+          <div className="header-controls"></div>
+        </div>
+        <div className="chat-messages">
         {messages.map((message, index) => (
           <div key={index} className={`message ${message.sender}`}>
             {message.hasImage && message.imageData && (
@@ -450,6 +591,23 @@ function App() {
               </div>
             )}
             <div className="message-text">{message.text}</div>
+            {(message.prompt || (message.text && message.text.length > 0)) && (
+              <details className="prompt-details">
+                <summary>Details</summary>
+                {message.prompt && (
+                  <>
+                    <div className="prompt-label">Prompt</div>
+                    <pre className="prompt-block">{message.prompt}</pre>
+                  </>
+                )}
+                {message.text && (
+                  <>
+                    <div className="prompt-label">Answer</div>
+                    <pre className="prompt-block">{message.text}</pre>
+                  </>
+                )}
+              </details>
+            )}
           </div>
         ))}
         {isLoading && (
@@ -461,7 +619,7 @@ function App() {
             </div>
           </div>
         )}
-      </div>
+        </div>
 
       {showActionLogs && (
         <div className="action-log-panel">
@@ -528,6 +686,8 @@ function App() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onFocus={() => setPanelOpaque(true)}
+            onBlur={() => setPanelOpaque(false)}
             onKeyPress={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -554,6 +714,17 @@ function App() {
           </button>
         </div>
       </div>
+      </div>
+      );})()}
+
+      {isDraggingNotch && (
+        <>
+          <div className={`notch preview ${getPreviewDock()}`} />
+          {panelOpen && (
+            <div className={`panel preview ${getPreviewDock() === 'center' ? '' : 'vertical ' + getPreviewDock()}`} />
+          )}
+        </>
+      )}
     </div>
   );
 }

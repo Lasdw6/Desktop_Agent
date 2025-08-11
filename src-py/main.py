@@ -18,6 +18,11 @@ from mss import mss
 from openai import OpenAI
 from PIL import Image, ImageDraw, ImageFont
 from ui_element_discovery import UIElementDiscovery, find_element_by_description, get_actionable_elements_summary
+from windows_ui_automation import (
+    discover_windows_elements,
+    get_windows_actionable_summary,
+    find_windows_element_by_description,
+)
 from web_browser_automation import WebBrowserAutomation, find_web_element_by_description
 
 # Load environment variables from .env file
@@ -192,12 +197,27 @@ def execute_automation_action(instruction):
 
 # --- UI Automation Functions ---
 
-def discover_ui_elements(focus_application=None):
-    """Discover all UI elements using Computer Vision on host screen"""
+def discover_ui_elements(focus_application=None, method: str = 'auto'):
+    """Discover all UI elements.
+
+    method:
+      - 'windows': Use Windows UI Automation (uiautomation)
+      - 'cv': Use Computer Vision + OCR
+      - 'auto': Try Windows UIA first on Windows, fallback to CV
+    """
     try:
+        if method == 'windows' or (method == 'auto' and os.name == 'nt'):
+            elements = discover_windows_elements(app_filter=focus_application)
+            # If UIA unavailable or failed, it returns a list with an error dict
+            if isinstance(elements, list) and elements and isinstance(elements[0], dict) and elements[0].get('error'):
+                # Fallback to CV
+                discovery = UIElementDiscovery(use_ocr=True, confidence_threshold=0.5)
+                return discovery.discover_elements(focus_application=focus_application)
+            return elements
+
+        # CV mode
         discovery = UIElementDiscovery(use_ocr=True, confidence_threshold=0.5)
-        elements = discovery.discover_elements(focus_application=focus_application)
-        return elements
+        return discovery.discover_elements(focus_application=focus_application)
     except Exception as e:
         return {"error": f"Failed to discover UI elements: {str(e)}"}
 
@@ -338,7 +358,7 @@ def chat_with_gpt(message):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5-nano-2025-08-07", # DO NOT CHANGE THIS MODEL
             messages=[
                 {"role": "user", "content": message}
             ]
@@ -355,7 +375,7 @@ def chat_with_vision(message, image_data):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5-nano-2025-08-07", # DO NOT CHANGE THIS MODEL
             messages=[
                 {
                     "role": "user",
@@ -371,7 +391,7 @@ def chat_with_vision(message, image_data):
                     ]
                 }
             ],
-            max_tokens=1000
+            max_completion_tokens=1000
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -496,12 +516,16 @@ def discover_ui_elements_route():
 
 @app.route("/ui-summary", methods=['GET'])
 def ui_summary_route():
-    """Get UI elements summary"""
+    """Get UI elements summary. Choose method with ?method=windows|cv|auto"""
     try:
         target_app = request.args.get('app', None)
-        elements = discover_ui_elements(focus_application=target_app)
+        method = request.args.get('method', 'auto').lower()
+        elements = discover_ui_elements(focus_application=target_app, method=method)
         if isinstance(elements, list):
-            summary = get_actionable_elements_summary(elements)
+            if method == 'windows' or (method == 'auto' and os.name == 'nt'):
+                summary = get_windows_actionable_summary(elements)
+            else:
+                summary = get_actionable_elements_summary(elements)
             return jsonify(summary)
         else:
             return jsonify(elements)
@@ -514,13 +538,17 @@ def find_ui_element_route():
     try:
         data = request.get_json()
         description = data.get('description', '')
+        method = (data.get('method') or 'auto').lower()
         
         if not description:
             return jsonify({"error": "Description is required"}), 400
         
-        elements = discover_ui_elements()
+        elements = discover_ui_elements(method=method)
         if isinstance(elements, list):
-            found = find_element_by_description(description, elements)
+            if method == 'windows' or (method == 'auto' and os.name == 'nt'):
+                found = find_windows_element_by_description(description, elements)
+            else:
+                found = find_element_by_description(description, elements)
             if found:
                 return jsonify(found)
             else:
@@ -528,6 +556,28 @@ def find_ui_element_route():
         else:
             return jsonify(elements), 500
             
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# --- Windows-specific UIA routes ---
+
+@app.route('/windows-ui-elements', methods=['GET'])
+def windows_ui_elements_route():
+    try:
+        target_app = request.args.get('app', None)
+        elements = discover_windows_elements(app_filter=target_app)
+        return jsonify(elements)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/windows-ui-summary', methods=['GET'])
+def windows_ui_summary_route():
+    try:
+        target_app = request.args.get('app', None)
+        elements = discover_windows_elements(app_filter=target_app)
+        if isinstance(elements, list):
+            return jsonify(get_windows_actionable_summary(elements))
+        return jsonify(elements)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -648,5 +698,5 @@ if __name__ == "__main__":
     print("  POST /find-ui-element      - Find UI element by description")
     print("  GET  /test-host-screen     - Test host screen detection")
     print()
-    
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+    # Run without the debug reloader to avoid mid-request restarts
+    app.run(debug=False, use_reloader=False, host='0.0.0.0', port=5000)
